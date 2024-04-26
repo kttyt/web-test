@@ -13,6 +13,7 @@ jobs:
 
       - name: Bump version and tag
         uses: anothrNick/github-tag-action@v1
+        id: bump_version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BUMP: minor
