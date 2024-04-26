@@ -42,4 +42,6 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.bump_version.outputs.new_tag }}
             ${{ github.ref == 'refs/heads/master' && format('ghcr.io/{0}:latest', github.repository) }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           platforms: linux/amd64, linux/arm64
