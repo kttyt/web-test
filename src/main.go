@@ -10,17 +10,20 @@ import (
 	"syscall"
 	"time"
 
+	echologrus "github.com/davrux/echo-logrus/v4"
 	"github.com/labstack/echo-contrib/prometheus"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
 
-// Logger interface for logging
-type Logger interface {
-	Infof(format string, args ...interface{})
-	Errorf(format string, args ...interface{})
-	Warnf(format string, args ...interface{})
+var log = logrus.New()
+
+func init() {
+	log.SetFormatter(&logrus.JSONFormatter{})
+	log.SetOutput(os.Stdout)
+	log.SetLevel(logrus.InfoLevel)
 }
 
 // Config stores the application settings
@@ -31,7 +34,7 @@ type Config struct {
 }
 
 // NewConfig creates a new configuration instance from environment variables
-func NewConfig(logger Logger) *Config {
+func NewConfig() *Config {
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("app")
 	viper.BindEnv("POD_NAME")
@@ -46,17 +49,17 @@ func NewConfig(logger Logger) *Config {
 		MonitorInterval: viper.GetInt("MONITOR_INTERVAL"),
 	}
 
-	if err := cfg.Validate(logger); err != nil {
-		logger.Errorf("Invalid configuration: %v", err)
+	if err := cfg.Validate(); err != nil {
+		log.Errorf("Invalid configuration: %v", err)
 	}
 
 	return cfg
 }
 
 // Validate checks the configuration for any invalid values
-func (cfg *Config) Validate(logger Logger) error {
+func (cfg *Config) Validate() error {
 	if cfg.MonitorURL == "" {
-		logger.Warnf("Monitor URL is empty. Monitoring will not be started.")
+		log.Warnf("Monitor URL is empty. Monitoring will not be started.")
 	} else if _, err := url.ParseRequestURI(cfg.MonitorURL); err != nil {
 		return fmt.Errorf("invalid monitor URL: %v", err)
 	}
@@ -70,7 +73,6 @@ func (cfg *Config) Validate(logger Logger) error {
 type Monitor struct {
 	URL      string
 	Interval int
-	Logger   Logger
 }
 
 // Start begins the monitoring process
@@ -81,11 +83,11 @@ func (m *Monitor) Start() {
 	for range ticker.C {
 		response, err := http.Get(m.URL)
 		if err != nil {
-			m.Logger.Errorf("Failed to reach monitor target: %v", err)
+			log.Errorf("Failed to reach monitor target: %v", err)
 			continue
 		}
 
-		m.Logger.Infof("Success: status code %d for monitor URL %s", response.StatusCode, m.URL)
+		log.Infof("Success: status code %d for monitor URL %s", response.StatusCode, m.URL)
 		response.Body.Close()
 	}
 }
@@ -119,9 +121,12 @@ func setSecurityHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 // main is the entry point of the application
 func main() {
 	e := echo.New()
-	config := NewConfig(e.Logger)
+	config := NewConfig()
 
-	e.Use(middleware.Logger(), middleware.Recover(), setSecurityHeaders, middleware.CSRFWithConfig(middleware.CSRFConfig{
+	echologrus.Logger = log
+	e.Logger = echologrus.GetEchoLogger()
+
+	e.Use(echologrus.Middleware(), middleware.Recover(), setSecurityHeaders, middleware.CSRFWithConfig(middleware.CSRFConfig{
 		TokenLookup: "header:X-XSRF-TOKEN",
 		CookiePath:  "/",
 	}))
@@ -135,11 +140,10 @@ func main() {
 		monitor := Monitor{
 			URL:      config.MonitorURL,
 			Interval: config.MonitorInterval,
-			Logger:   e.Logger,
 		}
 		go monitor.Start()
 	} else {
-		e.Logger.Warnf("Monitor URL is empty, skipping monitoring process.")
+		log.Warnf("Monitor URL is empty, skipping monitoring process.")
 	}
 
 	startServer(e)
@@ -149,7 +153,7 @@ func main() {
 func startServer(e *echo.Echo) {
 	go func() {
 		if err := e.Start(":8080"); err != nil && err != http.ErrServerClosed {
-			e.Logger.Fatal("shutting down the server")
+			log.Fatal("shutting down the server")
 		}
 	}()
 
@@ -161,6 +165,6 @@ func startServer(e *echo.Echo) {
 	defer cancel()
 
 	if err := e.Shutdown(ctx); err != nil {
-		e.Logger.Fatal(err)
+		log.Fatal(err)
 	}
 }
