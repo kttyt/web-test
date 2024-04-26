@@ -57,9 +57,7 @@ func NewConfig(logger Logger) *Config {
 func (cfg *Config) Validate(logger Logger) error {
 	if cfg.MonitorURL == "" {
 		logger.Warnf("Monitor URL is empty. Monitoring will not be started.")
-		return nil // Not an error, just a warning.
-	}
-	if _, err := url.ParseRequestURI(cfg.MonitorURL); err != nil {
+	} else if _, err := url.ParseRequestURI(cfg.MonitorURL); err != nil {
 		return fmt.Errorf("invalid monitor URL: %v", err)
 	}
 	if cfg.MonitorInterval <= 0 {
