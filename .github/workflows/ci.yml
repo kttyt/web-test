@@ -18,6 +18,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BUMP: minor
           INITIAL_VERSION: '0.0.0'
+          WITH_V: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -37,7 +38,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.bump_version.outputs.new_tag }}
-            ${{ github.ref == 'refs/heads/master' && 'ghcr.io/${{ github.repository }}:latest' }}
+            ${{ github.ref == 'refs/heads/master' && format('ghcr.io/{0}:latest', github.repository) }}
           build-args: |
             TARGETOS=linux
             TARGETARCH=amd64
