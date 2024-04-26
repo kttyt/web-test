@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,54 +16,83 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Logger interface for logging
+type Logger interface {
+	Infof(format string, args ...interface{})
+	Errorf(format string, args ...interface{})
+	Warnf(format string, args ...interface{})
+}
+
+// Config stores the application settings
 type Config struct {
 	PodName         string
 	MonitorURL      string
 	MonitorInterval int
 }
 
-func NewConfig() *Config {
+// NewConfig creates a new configuration instance from environment variables
+func NewConfig(logger Logger) *Config {
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("app")
 	viper.BindEnv("POD_NAME")
 	viper.BindEnv("MONITOR_URL")
 	viper.BindEnv("MONITOR_INTERVAL")
 
-	viper.SetDefault("MONITOR_INTERVAL", 20) // 20 секунд
+	viper.SetDefault("MONITOR_INTERVAL", 20) // 20 seconds
 
-	return &Config{
+	cfg := &Config{
 		PodName:         viper.GetString("POD_NAME"),
 		MonitorURL:      viper.GetString("MONITOR_URL"),
 		MonitorInterval: viper.GetInt("MONITOR_INTERVAL"),
 	}
+
+	if err := cfg.Validate(logger); err != nil {
+		logger.Errorf("Invalid configuration: %v", err)
+	}
+
+	return cfg
 }
 
-func (cfg *Config) Validate() {
+// Validate checks the configuration for any invalid values
+func (cfg *Config) Validate(logger Logger) error {
+	if cfg.MonitorURL == "" {
+		logger.Warnf("Monitor URL is empty. Monitoring will not be started.")
+		return nil // Not an error, just a warning.
+	}
 	if _, err := url.ParseRequestURI(cfg.MonitorURL); err != nil {
-		log.Printf("Invalid monitor URL: %v", err)
+		return fmt.Errorf("invalid monitor URL: %v", err)
 	}
-
 	if cfg.MonitorInterval <= 0 {
-		log.Fatalf("Invalid monitor interval, must be greater than zero.")
+		return fmt.Errorf("invalid monitor interval, must be greater than zero")
 	}
+	return nil
 }
 
-func MonitorTarget(monitorURL string, interval int) {
-	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+// Monitor handles the monitoring of a given URL at specified intervals
+type Monitor struct {
+	URL      string
+	Interval int
+	Logger   Logger
+}
+
+// Start begins the monitoring process
+func (m *Monitor) Start() {
+	ticker := time.NewTicker(time.Duration(m.Interval) * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		response, err := http.Get(monitorURL)
+		response, err := http.Get(m.URL)
 		if err != nil {
-			log.Printf("Failed to reach monitor target: %v", err)
+			m.Logger.Errorf("Failed to reach monitor target: %v", err)
 			continue
 		}
 
-		log.Printf("Success: status code %d for monitor URL %s", response.StatusCode, monitorURL)
+		m.Logger.Infof("Success: status code %d for monitor URL %s", response.StatusCode, m.URL)
 		response.Body.Close()
 	}
 }
 
+// setupRoutes configures the HTTP routes for the application
 func setupRoutes(e *echo.Echo, cfg *Config) {
 	e.GET("/healthz", func(c echo.Context) error {
 		return c.String(http.StatusOK, "ok")
@@ -79,6 +108,7 @@ func setupRoutes(e *echo.Echo, cfg *Config) {
 	})
 }
 
+// setSecurityHeaders adds security-related headers to all responses
 func setSecurityHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		c.Response().Header().Set("X-XSS-Protection", "1; mode=block")
@@ -88,11 +118,11 @@ func setSecurityHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
+// main is the entry point of the application
 func main() {
-	config := NewConfig()
-	config.Validate()
-
 	e := echo.New()
+	config := NewConfig(e.Logger)
+
 	e.Use(middleware.Logger(), middleware.Recover(), setSecurityHeaders, middleware.CSRFWithConfig(middleware.CSRFConfig{
 		TokenLookup: "header:X-XSRF-TOKEN",
 		CookiePath:  "/",
@@ -104,12 +134,20 @@ func main() {
 	setupRoutes(e, config)
 
 	if config.MonitorURL != "" {
-		go MonitorTarget(config.MonitorURL, config.MonitorInterval)
+		monitor := Monitor{
+			URL:      config.MonitorURL,
+			Interval: config.MonitorInterval,
+			Logger:   e.Logger,
+		}
+		go monitor.Start()
+	} else {
+		e.Logger.Warnf("Monitor URL is empty, skipping monitoring process.")
 	}
 
 	startServer(e)
 }
 
+// startServer initializes and starts the HTTP server
 func startServer(e *echo.Echo) {
 	go func() {
 		if err := e.Start(":8080"); err != nil && err != http.ErrServerClosed {
